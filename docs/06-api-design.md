@@ -485,3 +485,106 @@ GET /api/v1/orders?customerId={customerId}
 * Large orders with many items
 
 ---
+## 5. Order Processing Flow (Inventory & Payment Interaction)
+
+### 5.1 Overview
+
+After an order is created, further processing is handled asynchronously through events.
+
+This ensures:
+
+* Loose coupling between services
+* Better scalability
+* Improved fault tolerance
+
+---
+
+### 5.2 High-Level Flow
+
+1. Order Service creates order with status = `CREATED`
+2. Order Service publishes `OrderCreated` event
+3. Inventory Service consumes event and reserves stock
+4. Payment Service consumes event and processes payment
+5. Final status is updated based on outcomes
+
+---
+
+### 5.3 Event-Driven Approach
+
+Instead of direct service calls:
+
+* Order Service → publishes event
+* Other services → react independently
+
+This avoids tight coupling and improves system resilience.
+
+---
+
+### 5.4 Responsibilities
+
+#### Order Service
+
+* Create order
+* Publish `OrderCreated` event
+* Maintain order status
+
+#### Inventory Service
+
+* Reserve stock
+* Release stock on failure
+
+#### Payment Service
+
+* Process payment
+* Update payment status
+
+---
+
+### 5.5 Failure Scenarios
+
+#### Case 1: Payment Failed
+
+* Order status → CANCELLED
+* Inventory → release reserved stock
+
+---
+
+#### Case 2: Inventory Failed
+
+* Order status → CANCELLED
+* Payment → may require refund (future enhancement)
+
+---
+
+#### Case 3: Timeout / Partial Failure
+
+* Requires retry mechanisms (to be implemented later)
+
+---
+
+### 5.6 Design Considerations
+
+#### Asynchronous Processing
+
+* Improves performance and scalability
+* Avoids blocking user requests
+
+#### Eventual Consistency
+
+* System may be temporarily inconsistent
+* Final consistency is achieved through events
+
+#### Loose Coupling
+
+* Services do not directly depend on each other
+
+---
+
+### 5.7 Future Enhancements
+
+* Kafka topic design
+* Retry and dead-letter queues
+* Idempotency handling
+* Saga pattern for distributed transactions
+
+---
