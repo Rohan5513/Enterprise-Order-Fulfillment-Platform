@@ -204,8 +204,132 @@ Each service will define its own schema:
 
 ---
 
-## 9. Interview Explanation
+## 9. Customer Service — Schema Design
 
-We used a **database-per-service** approach to ensure strict data ownership and avoid tight coupling between services.
+### 9.1 Table: customer
 
-Each service manages its own data and communicates via REST or events. This allows independent scaling, deployment, and aligns with real-world microservices architecture.
+```sql
+CREATE TABLE customer (
+    id UUID PRIMARY KEY,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    password_hash VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+```
+
+---
+
+### 9.2 Constraints
+
+```sql
+ALTER TABLE customer
+ADD CONSTRAINT uq_customer_email UNIQUE (email);
+```
+
+---
+
+### 9.3 Indexes
+
+```sql
+CREATE INDEX idx_customer_email ON customer(email);
+```
+
+---
+
+### 9.4 Status Values
+
+Allowed values for `status`:
+
+* ACTIVE
+* INACTIVE
+* BLOCKED
+
+---
+
+### 9.5 Design Decisions
+
+#### UUID as Primary Key
+
+* Suitable for distributed systems
+* Avoids ID collision across services
+
+#### Unique Email
+
+* Ensures one account per email
+* Used for authentication
+
+#### No Cross-Service Dependencies
+
+* Customer Service owns its data completely
+
+---
+
+### 9.6 Edge Cases
+
+* Duplicate registration attempts
+* Email case sensitivity (should be normalized at application level)
+* Partial failures during registration
+
+---
+
+### 9.7 Future Enhancements
+
+* Email verification flow
+* Password reset tokens
+* Soft delete (`is_deleted` flag)
+* Audit tracking (`created_by`, `updated_by`)
+
+---
+
+## 10. Database Migration Strategy
+
+We will use **Flyway** for managing database schema changes.
+
+### 10.1 Approach
+
+* Each schema change is versioned using migration scripts
+* Migrations are applied automatically on application startup
+* Schema evolution is incremental and backward-compatible where possible
+
+---
+
+### 10.2 Naming Convention
+
+Migration files follow the format:
+
+```text
+V1__create_customer_table.sql
+V2__add_customer_indexes.sql
+```
+
+---
+
+### 10.3 Benefits
+
+* Consistent database state across environments
+* Eliminates manual schema setup
+* Enables safe and traceable schema evolution
+* Simplifies onboarding and deployment
+
+---
+
+### 10.4 Service-Level Migration Structure
+
+Each service will maintain its own migration scripts:
+
+```text
+customer-service/
+  └── src/main/resources/db/migration
+
+product-service/
+  └── src/main/resources/db/migration
+```
+
+This aligns with the database-per-service pattern and keeps schema ownership isolated.
+
+---
