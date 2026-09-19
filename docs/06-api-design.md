@@ -187,3 +187,121 @@ GET /api/v1/customers/{customerId}
 * Non-existent customer ID
 
 ---
+## 3. Product Service APIs
+
+### 3.1 Get Product List
+
+**Endpoint**
+
+```http
+GET /api/v1/products
+```
+
+---
+
+### Query Parameters
+
+| Parameter | Type   | Description                |
+| --------- | ------ | -------------------------- |
+| page      | int    | Page number (default: 0)   |
+| size      | int    | Page size (default: 10)    |
+| category  | string | Filter by product category |
+| status    | string | Filter by product status   |
+| minPrice  | number | Minimum price              |
+| maxPrice  | number | Maximum price              |
+
+---
+
+### Example Request
+
+```http
+GET /api/v1/products?page=0&size=10&category=electronics&minPrice=100
+```
+
+---
+
+### Response
+
+```json
+{
+  "data": {
+    "content": [
+      {
+        "id": "uuid",
+        "sku": "SKU123",
+        "productName": "Mobile Phone",
+        "productCategory": "electronics",
+        "unitPrice": 150.00,
+        "currencyCode": "INR",
+        "productStatus": "ACTIVE"
+      }
+    ],
+    "page": 0,
+    "size": 10,
+    "totalElements": 100
+  },
+  "message": "Products retrieved successfully",
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+---
+
+### 3.2 Get Product Details
+
+**Endpoint**
+
+```http
+GET /api/v1/products/{productId}
+```
+
+---
+
+### Response
+
+```json
+{
+  "data": {
+    "id": "uuid",
+    "sku": "SKU123",
+    "productName": "Mobile Phone",
+    "productDescription": "Latest smartphone",
+    "productCategory": "electronics",
+    "unitPrice": 150.00,
+    "currencyCode": "INR",
+    "productStatus": "ACTIVE"
+  },
+  "message": "Product retrieved successfully",
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+---
+
+### 3.3 Design Considerations
+
+#### Pagination
+
+* Prevents large data loads
+* Improves performance
+* Standard approach for listing APIs
+
+#### Filtering
+
+* Enables flexible querying
+* Reduces need for multiple endpoints
+
+#### No Business Logic Leakage
+
+* Only necessary fields returned
+* Internal DB structure is hidden
+
+---
+
+### 3.4 Edge Cases
+
+* Invalid pagination parameters
+* No products found
+* Product not found by ID
+
+---
