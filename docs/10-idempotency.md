@@ -2,176 +2,137 @@
 
 ## 1. Overview
 
-Idempotency ensures that repeated execution of the same request produces the same result without unintended side effects.
+Idempotency means that repeating the same operation produces the same result without extra side effects.
 
-It is critical for handling:
+It is required at three levels:
 
-* Network retries
-* Duplicate requests
-* Distributed system failures
+| Level    | Threat                                    | Mechanism                              |
+| -------- | ----------------------------------------- | -------------------------------------- |
+| API      | Client retries, double-clicks             | `Idempotency-Key` header + table       |
+| Consumer | Kafka delivers an event more than once    | `processed_events` table               |
+| Business | Same command reaches a service twice      | Unique constraints on business keys    |
 
 ---
 
-## 2. API-Level Idempotency
+## 2. API-Level Idempotency (Create Order)
 
-### 2.1 Approach
-
-For operations like **Create Order**, clients must send an idempotency key.
-
-Example header:
+### 2.1 Client contract
 
 ```http
+POST /api/v1/orders
 Idempotency-Key: 123e4567-e89b-12d3-a456-426614174000
 ```
 
----
+* Required on `POST /api/v1/orders`. Missing key -> `400 IDEMPOTENCY_KEY_REQUIRED`
+* UUID v4 recommended, maximum 100 characters
+* One key per **user intention**. The client reuses the same key for every retry of that intention
+* Scope is per customer: the customer comes from the JWT, so two customers can never collide
 
-### 2.2 Behavior
-
-* First request → processed normally
-* Duplicate request with same key → return previous response
-
----
-
-### 2.3 Storage Strategy
-
-Maintain a table to track processed requests:
+### 2.2 Table
 
 ```sql
 CREATE TABLE idempotency_keys (
-    id UUID PRIMARY KEY,
-    idempotency_key VARCHAR(100) NOT NULL,
-    request_hash VARCHAR(255) NOT NULL,
-    response_payload TEXT,
-    status VARCHAR(20) NOT NULL,
-    created_at_utc TIMESTAMP NOT NULL
+    id               UUID PRIMARY KEY,
+    customer_id      UUID         NOT NULL,
+    idempotency_key  VARCHAR(100) NOT NULL,
+    request_hash     CHAR(64)     NOT NULL,
+    resource_id      UUID         NOT NULL,
+    response_status  SMALLINT,
+    response_body    JSONB,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    expires_at       TIMESTAMPTZ  NOT NULL,
+    CONSTRAINT uq_idempotency_scope UNIQUE (customer_id, idempotency_key)
 );
+
+CREATE INDEX idx_idempotency_expires_at ON idempotency_keys (expires_at);
 ```
 
----
+* `request_hash`: SHA-256 (hex) of the canonical request body (sorted keys; item order is significant)
+* `resource_id`: the order ID, generated before the insert
+* `response_*`: filled in the same transaction, so other requests never see them empty
 
-### 2.4 Key Rules
+### 2.3 Processing flow
 
-* Idempotency key must be unique per request
-* Same key + different payload → reject
-* Store response for reuse
+1. **Before any transaction:** validate input, take the customer from the JWT, compute `request_hash`, and call the Product Service for prices. No DB transaction is open during remote calls
+2. Begin transaction
+3. Insert the key row with `ON CONFLICT (customer_id, idempotency_key) DO NOTHING`
+4. **Row inserted (first time):** create the order, items, status history and outbox event; store the response on the key row; commit; return `201`
+5. **No row inserted (key exists):** read the existing row
+   * same `request_hash` -> return the stored status and body (add header `Idempotent-Replayed: true`)
+   * different `request_hash` -> `422 IDEMPOTENCY_KEY_REUSED`
+
+### 2.4 Concurrent duplicates
+
+If two identical requests arrive together, the second insert **waits** on the unique index until the first transaction ends:
+
+* first commits -> second sees the row and replays the stored response
+* first rolls back -> second proceeds as a first-time request
+
+This is why no `IN_PROGRESS` status is needed.
+
+### 2.5 What is (not) stored
+
+* Only **successful** creations are stored
+* Validation errors and rolled-back attempts leave no row, so the client can fix the request and retry with the same key
+* If the server crashes after commit but before responding, the retry receives the stored response
+
+### 2.6 Retention
+
+Keys expire after 24 hours. A scheduled job deletes expired rows. After expiry, the same key is treated as a new request.
 
 ---
 
 ## 3. Consumer-Level Idempotency
 
-When processing events:
-
-* Same event may be delivered multiple times
-
-### Approach:
-
-* Track processed `eventId`
-* Skip duplicates
-
----
-
-### Example Table
+Kafka guarantees at-least-once delivery, so every consumer must tolerate duplicates.
 
 ```sql
 CREATE TABLE processed_events (
-    event_id UUID PRIMARY KEY,
-    processed_at_utc TIMESTAMP NOT NULL
+    event_id      UUID         NOT NULL,
+    handler       VARCHAR(100) NOT NULL,
+    processed_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (event_id, handler)
 );
 ```
 
----
+Rules:
 
-## 4. Design Considerations
+1. In **one** DB transaction: insert into `processed_events` (`ON CONFLICT DO NOTHING`), apply the business change, write outbox events
+2. If the insert added no row, the event was already handled: skip it
+3. Commit the Kafka offset only **after** the DB transaction commits
+4. Keep rows longer than the Kafka retention period (for example 14 days), then purge
 
-### Stateless APIs
-
-* Idempotency handled via storage
-* No session dependency
-
----
-
-### Data Consistency
-
-* Prevents duplicate order creation
-* Prevents double payment
+At-least-once delivery plus this dedup gives effectively-once processing.
 
 ---
 
-### Failure Handling
+## 4. Business-Level Idempotency
 
-* Safe retries without side effects
-* Supports eventual consistency
+Unique constraints protect against duplicates that slip past the layers above:
+
+| Service   | Constraint                                    | Effect                                                 |
+| --------- | --------------------------------------------- | ------------------------------------------------------ |
+| Inventory | `UNIQUE (order_id, product_id)` on reservations | Reserving twice is a no-op                           |
+| Inventory | Release only touches `ACTIVE` reservations    | Releasing twice is a no-op                             |
+| Payment   | `UNIQUE (order_id, attempt_no)`               | One row per attempt                                    |
+| Payment   | Provider call uses key `<order_id>:<attempt_no>` | Provider never charges twice for the same attempt   |
+| Order     | Transition table + state guard (see 09)       | Re-applied transitions are ignored                     |
 
 ---
 
 ## 5. Edge Cases
 
-* Same key with different payload
-* Partial processing failures
-* Expired idempotency keys (future enhancement)
+* Same key, different payload -> `422`
+* Same key, same payload, concurrent -> second waits, then replays
+* Crash before commit -> nothing saved, safe to retry
+* Crash after commit, before response -> retry returns stored response
+* Key expired -> treated as a new request
+* Same key used by two customers -> independent
 
 ---
 
 ## 6. Future Enhancements
 
-* TTL for idempotency keys
-* Distributed cache (Redis) for faster lookup
-* Integration with message queues
-
----
-## 7. Order Creation Idempotency Flow
-
-### 7.1 Request Flow
-
-1. Client sends request with `Idempotency-Key`
-2. System checks if key exists
-3. If not present → process request
-4. If present → return stored response
-
----
-
-### 7.2 Processing Steps
-
-* Insert idempotency record with status = `IN_PROGRESS`
-* Process order creation
-* Store response payload
-* Update status to `COMPLETED`
-
----
-
-### 7.3 Retry Handling
-
-* If status = `COMPLETED` → return stored response
-* If status = `IN_PROGRESS` → reject or retry later
-* If status = `FAILED` → allow reprocessing
-
----
-
-### 7.4 Payload Validation
-
-* Same idempotency key must have identical request payload
-* Requests with different payload for same key are rejected
-
----
-
-### 7.5 Transaction Handling
-
-Idempotency record and order creation must be part of a single transaction to ensure consistency.
-
----
-
-### 7.6 Failure Recovery
-
-* In case of system crash, retries will reuse stored data
-* `resource_id` can be used to fetch existing order
-
----
-
-### 7.7 Design Benefits
-
-* Prevents duplicate order creation
-* Ensures safe retries
-* Improves system reliability
-
----
+* Redis cache in front of the key lookup
+* Store selected failure responses (for example, 409 conflicts)
+* Metrics: replay rate, key-reuse rejections
