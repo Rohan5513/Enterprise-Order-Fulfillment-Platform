@@ -2,72 +2,98 @@
 
 ## 1. Overview
 
-Kafka is used for asynchronous communication between services.
-
-It enables:
+Kafka carries asynchronous events between services. It provides:
 
 * Loose coupling between services
-* Scalable event processing
-* Reliable communication in distributed systems
+* Durable, replayable event history
+* Independent scaling of consumers
+
+Delivery is **at-least-once**. Every consumer must be idempotent (see 10).
 
 ---
 
-## 2. Topic Design
+## 2. Topics and Keys
 
-### Topics
+| Topic              | Carries events about | Dead-letter topic      |
+| ------------------ | -------------------- | ---------------------- |
+| `order-events`     | Order lifecycle      | `order-events.DLT`     |
+| `inventory-events` | Stock reservations   | `inventory-events.DLT` |
+| `payment-events`   | Payments and refunds | `payment-events.DLT`   |
 
-* `order-events`
-* `inventory-events`
-* `payment-events`
-
-Each topic represents a business domain and carries related events.
-
----
-
-## 3. Event Naming Convention
-
-Events use **past-tense naming** to represent completed actions:
-
-* OrderCreated
-* InventoryReserved
-* InventoryReleased
-* PaymentProcessed
-* PaymentFailed
+* **Message key = `orderId`** for every event. All events for one order go to the same partition, so consumers see them in order
+* Partitions: 3 (local/dev). Replication factor: 1 in dev, 3 in production
+* Retention: 7 days
+* One consumer group per service (`inventory-service`, `payment-service`, and so on)
 
 ---
 
-## 4. Event Structure
+## 3. Event Naming
 
-All events follow a consistent structure:
+Past tense, describing something that already happened:
+
+`OrderCreated`, `InventoryReserved`, `InventoryReservationFailed`, `PaymentSucceeded`, `PaymentFailed`
+
+Events the Order Service publishes to ask another service to act use the form `<Thing>Requested` (`PaymentRequested`, `RefundRequested`): the fact is that the request was made.
+
+---
+
+## 4. Event Envelope
 
 ```json
 {
   "eventId": "uuid",
   "eventType": "OrderCreated",
-  "timestamp": "ISO-8601",
+  "eventVersion": 1,
+  "occurredAt": "2026-01-01T10:00:00Z",
+  "aggregateId": "order-uuid",
+  "correlationId": "order-uuid",
   "data": {}
 }
 ```
 
+* `eventId` is unique and is the key for consumer deduplication
+* `correlationId` is the `orderId`, so one order can be traced across all services
+* Trace context (`traceparent`) travels in Kafka headers
+
 ---
 
-## 5. OrderCreated Event
+## 5. Event Catalogue
 
-### Example Payload
+| Event                        | Topic              | Producer  | Consumers              | Meaning                                         |
+| ---------------------------- | ------------------ | --------- | ---------------------- | ----------------------------------------------- |
+| `OrderCreated`               | `order-events`     | Order     | Inventory, Notification| Order saved. Reserve stock                      |
+| `InventoryReserved`          | `inventory-events` | Inventory | Order                  | All items reserved                              |
+| `InventoryReservationFailed` | `inventory-events` | Inventory | Order                  | Could not reserve. Nothing was reserved         |
+| `InventoryReleased`          | `inventory-events` | Inventory | (audit)                | Reservations released                           |
+| `PaymentRequested`           | `order-events`     | Order     | Payment                | Charge this amount                              |
+| `PaymentSucceeded`           | `payment-events`   | Payment   | Order                  | Payment completed                               |
+| `PaymentFailed`              | `payment-events`   | Payment   | Order                  | Payment declined or failed                      |
+| `OrderConfirmed`             | `order-events`     | Order     | Inventory, Notification| Commit stock. Notify customer                   |
+| `OrderCancelled`             | `order-events`     | Order     | Inventory, Notification| Release stock. Notify customer                  |
+| `RefundRequested`            | `order-events`     | Order     | Payment                | Late payment on a cancelled order               |
+| `PaymentRefunded`            | `payment-events`   | Payment   | Notification           | Refund completed                                |
+
+Inventory reservation is all-or-nothing per order, which is why there is a single `InventoryReservationFailed`.
+
+---
+
+## 6. Example Payloads
+
+### OrderCreated
 
 ```json
 {
   "eventId": "uuid",
   "eventType": "OrderCreated",
-  "timestamp": "2026-01-01T10:00:00Z",
+  "eventVersion": 1,
+  "occurredAt": "2026-01-01T10:00:00Z",
+  "aggregateId": "order-uuid",
+  "correlationId": "order-uuid",
   "data": {
-    "orderId": "uuid",
-    "customerId": "uuid",
+    "orderId": "order-uuid",
+    "customerId": "customer-uuid",
     "items": [
-      {
-        "productId": "uuid",
-        "quantity": 2
-      }
+      { "productId": "product-uuid", "quantity": 2 }
     ],
     "totalAmount": 300.00,
     "currencyCode": "INR"
@@ -75,164 +101,145 @@ All events follow a consistent structure:
 }
 ```
 
----
+### PaymentRequested
 
-## 6. Producer Responsibilities
+```json
+{
+  "data": {
+    "orderId": "order-uuid",
+    "amount": 300.00,
+    "currencyCode": "INR"
+  }
+}
+```
 
-### Order Service
+### PaymentSucceeded
 
-* Publishes `OrderCreated` event
-* Ensures event is emitted only after successful order creation
-* Uses Outbox pattern for reliability (defined later)
+```json
+{
+  "data": {
+    "orderId": "order-uuid",
+    "paymentId": "payment-uuid",
+    "paymentReference": "gateway-ref",
+    "amount": 300.00,
+    "currencyCode": "INR"
+  }
+}
+```
 
----
+### OrderCancelled
 
-## 7. Consumer Responsibilities
+```json
+{
+  "data": {
+    "orderId": "order-uuid",
+    "reason": "PAYMENT_FAILED"
+  }
+}
+```
 
-### Inventory Service
-
-* Consumes `OrderCreated` event
-* Reserves stock
-* Emits:
-
-  * `InventoryReserved`
-  * `InventoryFailed`
-
----
-
-### Payment Service
-
-* Consumes `OrderCreated` event
-* Processes payment
-* Emits:
-
-  * `PaymentProcessed`
-  * `PaymentFailed`
-
----
-
-## 8. Idempotency in Event Processing
-
-Consumers must handle duplicate events safely.
-
-### Approach
-
-* Track processed `eventId`
-* Ignore duplicate processing
-
-This ensures safe retries and prevents duplicate side effects.
+(Each example shows the `data` block. The envelope from section 4 wraps all of them.)
 
 ---
 
-## 9. Failure Handling (High-Level)
+## 7. Reliable Publishing (Outbox Pattern)
 
-* Retry transient failures
-* Log and track failed events
-* Introduce dead-letter queues (future enhancement)
+### 7.1 Problem
 
----
+A service must update its database **and** publish an event. These two cannot be one atomic operation:
 
-## 10. Event Design Principles
+* DB commit succeeds, publish fails -> event lost, workflow stalls
+* Publish succeeds, DB commit fails -> event describes something that never happened
 
-* Events are immutable
-* Payload should contain only required data
-* Avoid tight coupling between services
-* Maintain backward compatibility when evolving schema
+### 7.2 Solution
 
----
+Write the event to an `outbox_events` table **in the same transaction** as the business change. A separate relay publishes it afterwards.
 
-## 11. Reliable Event Publishing (Outbox Pattern)
+**Every service that publishes events has its own outbox** (Order, Inventory, Payment).
 
-### 11.1 Problem Statement
-
-Directly publishing events after database operations can lead to inconsistencies:
-
-* Database commit succeeds but event publish fails
-* Event publish succeeds but database commit fails
-
----
-
-### 11.2 Solution Overview
-
-The Outbox Pattern ensures reliable event publishing by storing events in the database within the same transaction as business data.
-
----
-
-### 11.3 Flow
-
-1. Order is created
-2. Event is inserted into `outbox_events` table in the same transaction
-3. Transaction is committed
-4. Background process reads pending events
-5. Events are published to Kafka
-6. Events are marked as processed
-
----
-
-### 11.4 Outbox Table Design
+### 7.3 Table
 
 ```sql
 CREATE TABLE outbox_events (
-    id UUID PRIMARY KEY,
-    aggregate_type VARCHAR(50) NOT NULL,
-    aggregate_id UUID NOT NULL,
-    event_type VARCHAR(50) NOT NULL,
-    payload TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    created_at_utc TIMESTAMP NOT NULL,
-    processed_at_utc TIMESTAMP
+    id               UUID PRIMARY KEY,
+    aggregate_type   VARCHAR(50)  NOT NULL,
+    aggregate_id     UUID         NOT NULL,
+    event_type       VARCHAR(100) NOT NULL,
+    topic            VARCHAR(100) NOT NULL,
+    event_key        VARCHAR(100) NOT NULL,
+    payload          JSONB        NOT NULL,
+    status           VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+    retry_count      INT          NOT NULL DEFAULT 0,
+    next_attempt_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_error       TEXT,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    published_at     TIMESTAMPTZ
 );
+
+CREATE INDEX idx_outbox_pending
+    ON outbox_events (next_attempt_at)
+    WHERE status = 'PENDING';
 ```
 
----
+* `id` **is** the `eventId` inside the payload
+* `payload` holds the full envelope
+* Status values: `PENDING`, `PUBLISHED`, `FAILED`
 
-### 11.5 Status Values
+### 7.4 Relay
 
-* PENDING
-* PROCESSED
-* FAILED
+Runs every second or so:
 
----
+```sql
+SELECT * FROM outbox_events
+WHERE status = 'PENDING' AND next_attempt_at <= now()
+ORDER BY created_at
+LIMIT 100
+FOR UPDATE SKIP LOCKED;
+```
 
-### 11.6 Background Processing
+1. Publish each row to `topic` with key `event_key`. Producer settings: `acks=all`, `enable.idempotence=true`
+2. On success: `status = PUBLISHED`, set `published_at`
+3. On failure: `retry_count + 1`, `next_attempt_at = now() + backoff` (2^n seconds, capped at 5 minutes), store `last_error`
+4. After 10 failures: `status = FAILED`, raise a metric and alert. Replay manually by setting the status back to `PENDING`
+5. Delete `PUBLISHED` rows older than 7 days
 
-* Poll events where `status = PENDING`
-* Publish to Kafka
-* Update status to `PROCESSED`
+`SKIP LOCKED` lets several relay instances run without publishing the same row twice.
 
----
+### 7.5 Guarantees
 
-### 11.7 Retry Strategy
-
-* Failed events can be retried
-* Prevents data loss
-* Ensures eventual consistency
-
----
-
-### 11.8 Design Benefits
-
-* Guarantees consistency between DB and events
-* Prevents event loss
-* Enables retry mechanisms
-* Decouples business logic from event publishing
+* No event is lost: it is committed with the business data
+* An event may be published **more than once** (published, then crash before marking). Consumers deduplicate
+* The saga (09) is causally ordered: an event for an order is only created after the previous one was consumed, so keyed partitions preserve the correct order
 
 ---
 
-### 11.9 Design Considerations
+## 8. Consumer Rules
 
-* Consumers must be idempotent
-* Monitor failed events
-* Avoid duplicate publishing
+Per event, in **one** DB transaction: dedupe (`processed_events`), apply the change, write outbox events. Then commit the Kafka offset.
+
+### Retries and dead-letter topics
+
+* Transient errors (DB down, timeout): retry with exponential backoff (for example 1s, 2s, 4s, 8s, 16s)
+* Permanent errors (unparseable message, invalid state transition): send straight to `<topic>.DLT`
+* Retries exhausted: send to `<topic>.DLT`
+* Use an error-handling deserializer so one bad message cannot block the partition
+* Alert on any message reaching a DLT. Build a replay tool later
+
+---
+
+## 9. Event Design Principles
+
+* Events are immutable facts
+* Carry IDs and the data consumers need, not whole entities
+* Include what the consumer needs so it never has to call back (for example, `PaymentRequested` carries the amount)
+* Evolve schemas by **adding optional fields only**. Consumers ignore unknown fields
+* A breaking change requires a new `eventVersion`, with both versions published during migration
 
 ---
 
-## 12. Future Enhancements
+## 10. Future Enhancements
 
-* Schema registry (Avro/JSON schema)
-* Partitioning strategy
-* Consumer groups
-* Dead-letter queues (DLQ)
-* Event versioning strategy
-
----
+* Schema registry (Avro or JSON Schema) and contract tests
+* Change Data Capture (Debezium) instead of polling the outbox
+* Replay tooling for dead-letter topics
+* Consumer lag monitoring and alerts
