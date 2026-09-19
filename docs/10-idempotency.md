@@ -120,3 +120,58 @@ CREATE TABLE processed_events (
 * Integration with message queues
 
 ---
+## 7. Order Creation Idempotency Flow
+
+### 7.1 Request Flow
+
+1. Client sends request with `Idempotency-Key`
+2. System checks if key exists
+3. If not present → process request
+4. If present → return stored response
+
+---
+
+### 7.2 Processing Steps
+
+* Insert idempotency record with status = `IN_PROGRESS`
+* Process order creation
+* Store response payload
+* Update status to `COMPLETED`
+
+---
+
+### 7.3 Retry Handling
+
+* If status = `COMPLETED` → return stored response
+* If status = `IN_PROGRESS` → reject or retry later
+* If status = `FAILED` → allow reprocessing
+
+---
+
+### 7.4 Payload Validation
+
+* Same idempotency key must have identical request payload
+* Requests with different payload for same key are rejected
+
+---
+
+### 7.5 Transaction Handling
+
+Idempotency record and order creation must be part of a single transaction to ensure consistency.
+
+---
+
+### 7.6 Failure Recovery
+
+* In case of system crash, retries will reuse stored data
+* `resource_id` can be used to fetch existing order
+
+---
+
+### 7.7 Design Benefits
+
+* Prevents duplicate order creation
+* Ensures safe retries
+* Improves system reliability
+
+---
