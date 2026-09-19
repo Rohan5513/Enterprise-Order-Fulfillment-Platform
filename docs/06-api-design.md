@@ -305,3 +305,183 @@ GET /api/v1/products/{productId}
 * Product not found by ID
 
 ---
+## 4. Order Service APIs
+
+### 4.1 Create Order
+
+**Endpoint**
+
+```http
+POST /api/v1/orders
+```
+
+---
+
+### Request Body
+
+```json
+{
+  "customerId": "uuid",
+  "items": [
+    {
+      "productId": "uuid",
+      "quantity": 2
+    },
+    {
+      "productId": "uuid",
+      "quantity": 1
+    }
+  ],
+  "currencyCode": "INR"
+}
+```
+
+---
+
+### Request Validation
+
+* `customerId` must exist
+* At least one item is required
+* Each item must have:
+
+  * valid `productId`
+  * quantity > 0
+* Duplicate product entries should be merged or rejected
+
+---
+
+### Response
+
+```json
+{
+  "data": {
+    "orderId": "uuid",
+    "orderNumber": "ORD-20260001",
+    "orderStatus": "CREATED"
+  },
+  "message": "Order created successfully",
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+---
+
+### 4.2 Get Order Details
+
+**Endpoint**
+
+```http
+GET /api/v1/orders/{orderId}
+```
+
+---
+
+### Response
+
+```json
+{
+  "data": {
+    "id": "uuid",
+    "orderNumber": "ORD-20260001",
+    "customerId": "uuid",
+    "orderStatus": "CREATED",
+    "totalAmount": 300.00,
+    "currencyCode": "INR",
+    "items": [
+      {
+        "productId": "uuid",
+        "quantity": 2,
+        "unitPrice": 100.00,
+        "totalPrice": 200.00
+      }
+    ]
+  },
+  "message": "Order retrieved successfully",
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+---
+
+### 4.3 Get Customer Orders
+
+**Endpoint**
+
+```http
+GET /api/v1/orders?customerId={customerId}
+```
+
+---
+
+### Query Parameters
+
+| Parameter  | Type | Description               |
+| ---------- | ---- | ------------------------- |
+| customerId | UUID | Filter orders by customer |
+| page       | int  | Page number               |
+| size       | int  | Page size                 |
+
+---
+
+### Response
+
+```json
+{
+  "data": {
+    "content": [
+      {
+        "orderId": "uuid",
+        "orderNumber": "ORD-20260001",
+        "orderStatus": "CONFIRMED",
+        "totalAmount": 300.00,
+        "currencyCode": "INR"
+      }
+    ],
+    "page": 0,
+    "size": 10,
+    "totalElements": 25
+  },
+  "message": "Orders retrieved successfully",
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+---
+
+### 4.4 Design Considerations
+
+#### Order Creation Flow (High-Level)
+
+1. Validate request
+2. Fetch product details (price, availability)
+3. Calculate total amount
+4. Create order and order items
+5. Set status = CREATED
+
+(Note: Inventory reservation and payment will be handled asynchronously later)
+
+---
+
+#### Pricing Integrity
+
+* Prices are fetched at order time
+* Stored in order_items as snapshot
+* Ensures historical accuracy
+
+---
+
+#### Stateless Design
+
+* Order API does not maintain session
+* Each request is self-contained
+
+---
+
+### 4.5 Edge Cases
+
+* Duplicate order submissions
+* Invalid product IDs
+* Price changes between request and processing
+* Large orders with many items
+
+---
