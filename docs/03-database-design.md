@@ -560,3 +560,90 @@ Potential approaches (to be implemented later):
 * Introduce low-stock alerts
 
 ---
+## 13. Payment Service — Schema Design
+
+### 13.1 Overview
+
+The Payment Service is responsible for processing and tracking payments for orders.
+
+It maintains:
+
+* Payment attempts
+* Payment status
+* External payment references
+
+---
+
+### 13.2 Table: payments
+
+```sql
+CREATE TABLE payments (
+    id UUID PRIMARY KEY,
+    order_id UUID NOT NULL,
+    payment_reference VARCHAR(100),
+    amount NUMERIC(12, 2) NOT NULL,
+    currency_code VARCHAR(10) NOT NULL,
+    payment_status VARCHAR(20) NOT NULL,
+    payment_method VARCHAR(50),
+    created_at_utc TIMESTAMP NOT NULL,
+    updated_at_utc TIMESTAMP NOT NULL
+);
+```
+
+---
+
+### 13.3 Indexes
+
+```sql
+CREATE INDEX idx_payments_order_id ON payments(order_id);
+CREATE INDEX idx_payments_status ON payments(payment_status);
+```
+
+---
+
+### 13.4 Payment Status Values
+
+Allowed values for `payment_status`:
+
+* SUCCESS
+* FAILED
+* TIMEOUT
+
+---
+
+### 13.5 Design Considerations
+
+#### Order Reference
+
+* `order_id` links payment to order
+* No foreign key across services
+
+#### Multiple Payment Attempts
+
+* Multiple rows can exist for same order
+* Supports retries and failure scenarios
+
+#### External Reference
+
+* `payment_reference` stores gateway response ID
+* Helps in reconciliation and debugging
+
+---
+
+### 13.6 Edge Cases
+
+* Payment timeout but actual success at provider
+* Duplicate payment attempts
+* Partial failures during processing
+* Mismatch between order amount and payment
+
+---
+
+### 13.7 Future Enhancements
+
+* Idempotency keys
+* Payment audit logs
+* Integration with real payment gateways
+* Retry mechanisms
+
+---
