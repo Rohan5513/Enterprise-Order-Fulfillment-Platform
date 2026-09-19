@@ -333,3 +333,138 @@ product-service/
 This aligns with the database-per-service pattern and keeps schema ownership isolated.
 
 ---
+## 11. Order Service — Schema Design
+
+### 11.1 Overview
+
+The Order Service is the core component of the system responsible for managing customer orders.
+
+It maintains:
+
+* Order lifecycle
+* Order items
+* Total pricing snapshot at time of purchase
+
+---
+
+### 11.2 Table: orders
+
+```sql
+CREATE TABLE orders (
+    id UUID PRIMARY KEY,
+    order_number VARCHAR(50) NOT NULL,
+    customer_id UUID NOT NULL,
+    order_status VARCHAR(30) NOT NULL,
+    total_amount NUMERIC(12, 2) NOT NULL,
+    currency_code VARCHAR(10) NOT NULL,
+    created_at_utc TIMESTAMP NOT NULL,
+    updated_at_utc TIMESTAMP NOT NULL
+);
+```
+
+---
+
+### 11.3 Constraints
+
+```sql
+ALTER TABLE orders
+ADD CONSTRAINT uq_order_number UNIQUE (order_number);
+```
+
+---
+
+### 11.4 Indexes
+
+```sql
+CREATE INDEX idx_orders_customer_id ON orders(customer_id);
+CREATE INDEX idx_orders_status ON orders(order_status);
+CREATE INDEX idx_orders_created_at ON orders(created_at_utc);
+```
+
+---
+
+### 11.5 Order Status Values
+
+Allowed values for `order_status`:
+
+* CREATED
+* PENDING_PAYMENT
+* CONFIRMED
+* CANCELLED
+
+---
+
+### 11.6 Table: order_items
+
+```sql
+CREATE TABLE order_items (
+    id UUID PRIMARY KEY,
+    order_id UUID NOT NULL,
+    product_id UUID NOT NULL,
+    quantity INT NOT NULL,
+    unit_price NUMERIC(12, 2) NOT NULL,
+    total_price NUMERIC(12, 2) NOT NULL
+);
+```
+
+---
+
+### 11.7 Constraints
+
+```sql
+ALTER TABLE order_items
+ADD CONSTRAINT fk_order_items_order
+FOREIGN KEY (order_id) REFERENCES orders(id);
+```
+
+---
+
+### 11.8 Indexes
+
+```sql
+CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX idx_order_items_product_id ON order_items(product_id);
+```
+
+---
+
+### 11.9 Design Considerations
+
+#### Order Number vs ID
+
+* `id` is internal (UUID)
+* `order_number` is external-facing and human-readable
+
+#### Snapshot Pricing
+
+* `unit_price` and `total_price` are stored in order_items
+* Ensures historical accuracy even if product price changes later
+
+#### Customer Reference
+
+* `customer_id` is stored without foreign key constraint across services
+* Data ownership remains within Customer Service
+
+#### One-to-Many Relationship
+
+* One order can contain multiple order items
+
+---
+
+### 11.10 Edge Cases
+
+* Duplicate order submission (requires idempotency at application level)
+* Partial order creation failures
+* Price mismatch scenarios
+* Large orders with many items
+
+---
+
+### 11.11 Future Enhancements
+
+* Order status history tracking
+* Payment reference linking
+* Discount and coupon handling
+* Tax calculation support
+
+---
