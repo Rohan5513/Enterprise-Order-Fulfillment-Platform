@@ -468,3 +468,95 @@ CREATE INDEX idx_order_items_product_id ON order_items(product_id);
 * Tax calculation support
 
 ---
+## 12. Inventory Service — Schema Design
+
+### 12.1 Overview
+
+The Inventory Service is responsible for managing product stock levels and ensuring consistency during concurrent operations.
+
+It maintains:
+
+* Available stock
+* Reserved stock for ongoing orders
+
+---
+
+### 12.2 Table: inventory
+
+```sql
+CREATE TABLE inventory (
+    id UUID PRIMARY KEY,
+    product_id UUID NOT NULL,
+    available_quantity INT NOT NULL,
+    reserved_quantity INT NOT NULL,
+    updated_at_utc TIMESTAMP NOT NULL
+);
+```
+
+---
+
+### 12.3 Constraints
+
+```sql
+ALTER TABLE inventory
+ADD CONSTRAINT uq_inventory_product UNIQUE (product_id);
+```
+
+---
+
+### 12.4 Indexes
+
+```sql
+CREATE INDEX idx_inventory_product_id ON inventory(product_id);
+```
+
+---
+
+### 12.5 Design Considerations
+
+#### Stock Separation
+
+* `available_quantity` represents sellable stock
+* `reserved_quantity` represents stock held for pending orders
+
+#### One Record per Product
+
+* Each product has a single inventory record
+* Enforced using unique constraint on `product_id`
+
+#### No Cross-Service Constraints
+
+* `product_id` is stored as reference only
+* No foreign key to Product Service
+
+---
+
+### 12.6 Concurrency Considerations
+
+Inventory updates must be handled carefully to avoid race conditions.
+
+Potential approaches (to be implemented later):
+
+* Optimistic locking (version column)
+* Pessimistic locking (SELECT FOR UPDATE)
+* Atomic update queries
+
+---
+
+### 12.7 Edge Cases
+
+* Concurrent stock updates
+* Negative stock due to race conditions
+* Reservation not released after failure
+* Partial system failures during order processing
+
+---
+
+### 12.8 Future Enhancements
+
+* Add version column for optimistic locking
+* Track inventory history
+* Support multi-warehouse inventory
+* Introduce low-stock alerts
+
+---
