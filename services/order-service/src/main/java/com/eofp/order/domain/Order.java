@@ -73,8 +73,13 @@ public class Order {
     }
 
     public static Order create(String orderNumber, UUID customerId, String currencyCode) {
+        return create(UUID.randomUUID(), orderNumber, customerId, currencyCode);
+    }
+
+    /** The id is chosen by the caller so it can be recorded (for example against an idempotency key) before the insert. */
+    public static Order create(UUID id, String orderNumber, UUID customerId, String currencyCode) {
         Order order = new Order();
-        order.id = UUID.randomUUID();     // assigned by the application, before any insert
+        order.id = Objects.requireNonNull(id);
         order.orderNumber = Objects.requireNonNull(orderNumber);
         order.customerId = Objects.requireNonNull(customerId);
         order.currencyCode = Objects.requireNonNull(currencyCode);
