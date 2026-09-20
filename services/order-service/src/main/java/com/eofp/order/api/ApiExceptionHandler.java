@@ -1,5 +1,6 @@
 package com.eofp.order.api;
 
+import com.eofp.order.application.IdempotencyKeyReusedException;
 import com.eofp.order.application.OrderNotFoundException;
 import com.eofp.order.application.OrderRequestRejectedException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -48,6 +49,10 @@ public class ApiExceptionHandler {
     @ExceptionHandler(MissingRequestHeaderException.class)
     public ResponseEntity<ApiErrorResponse> handleMissingHeader(MissingRequestHeaderException ex,
                                                                 HttpServletRequest request) {
+        if ("Idempotency-Key".equalsIgnoreCase(ex.getHeaderName())) {
+            return build(HttpStatus.BAD_REQUEST, "IDEMPOTENCY_KEY_REQUIRED",
+                    "The Idempotency-Key header is required", List.of(), request);
+        }
         return unauthorized(request);
     }
 
@@ -72,7 +77,15 @@ public class ApiExceptionHandler {
                     build(HttpStatus.UNPROCESSABLE_ENTITY, "PRODUCT_NOT_AVAILABLE", ex.getMessage(), List.of(), request);
             case MIXED_CURRENCY ->
                     build(HttpStatus.UNPROCESSABLE_ENTITY, "MIXED_CURRENCY", ex.getMessage(), List.of(), request);
+            case INVALID_IDEMPOTENCY_KEY ->
+                    build(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", ex.getMessage(), List.of(), request);
         };
+    }
+
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    public ResponseEntity<ApiErrorResponse> handleKeyReused(IdempotencyKeyReusedException ex,
+                                                            HttpServletRequest request) {
+        return build(HttpStatus.UNPROCESSABLE_ENTITY, "IDEMPOTENCY_KEY_REUSED", ex.getMessage(), List.of(), request);
     }
 
     @ExceptionHandler(OrderNotFoundException.class)

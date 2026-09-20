@@ -6,7 +6,8 @@ public class OrderRequestRejectedException extends RuntimeException {
     public enum Reason {
         DUPLICATE_PRODUCT,
         PRODUCT_NOT_AVAILABLE,
-        MIXED_CURRENCY
+        MIXED_CURRENCY,
+        INVALID_IDEMPOTENCY_KEY
     }
 
     private final Reason reason;

@@ -1,7 +1,7 @@
 package com.eofp.order.api;
 
+import com.eofp.order.application.CreateOrderResult;
 import com.eofp.order.application.CreateOrderService;
-import com.eofp.order.application.CreatedOrder;
 import com.eofp.order.application.OrderQueryService;
 import com.eofp.order.application.RequestedItem;
 import jakarta.validation.Valid;
@@ -39,16 +39,21 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<ApiResponse<CreateOrderResponse>> create(
             @RequestHeader("X-Customer-Id") UUID customerId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody CreateOrderRequest request) {
 
         List<RequestedItem> items = request.items().stream()
                 .map(item -> new RequestedItem(item.productId(), item.quantity()))
                 .toList();
-        CreatedOrder created = createOrderService.create(customerId, items);
+        CreateOrderResult result = createOrderService.create(customerId, idempotencyKey, items);
 
-        return ResponseEntity
-                .created(URI.create("/api/v1/orders/" + created.orderId()))
-                .body(ApiResponse.of(CreateOrderResponse.from(created), "Order created successfully"));
+        ResponseEntity.BodyBuilder response = ResponseEntity
+                .created(URI.create("/api/v1/orders/" + result.order().orderId()));
+        if (result.replayed()) {
+            response.header("Idempotent-Replayed", "true");
+        }
+        return response.body(ApiResponse.of(
+                CreateOrderResponse.from(result.order()), "Order created successfully"));
     }
 
     @GetMapping("/{orderId}")
