@@ -2,9 +2,28 @@ spring:
   application:
     name: order-service
 
+  datasource:
+    # Defaults match docker-compose for local development only.
+    # Real environments override these with environment variables (never commit real secrets).
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/order_db}
+    username: ${DB_USERNAME:order_svc}
+    password: ${DB_PASSWORD:order_dev}
+
+  jpa:
+    open-in-view: false            # no lazy loading during web rendering; fetch explicitly
+    hibernate:
+      ddl-auto: validate           # Flyway owns the schema; Hibernate only checks it matches
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+
 server:
   port: 8083
-  shutdown: graceful          # finish in-flight requests before stopping
+  shutdown: graceful
 
 management:
   endpoints:
@@ -14,7 +33,7 @@ management:
   endpoint:
     health:
       probes:
-        enabled: true         # adds /actuator/health/liveness and /actuator/health/readiness
+        enabled: true
   metrics:
     tags:
-      application: ${spring.application.name}   # lets Grafana filter metrics per service
+      application: ${spring.application.name}
